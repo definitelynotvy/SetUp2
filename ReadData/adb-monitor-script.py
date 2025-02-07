@@ -1,6 +1,7 @@
 import ast
 from datetime import datetime, timedelta
 import os
+import re
 import threading
 import time
 import subprocess
@@ -182,6 +183,13 @@ def parse_and_save_data(input_file, output_file):
 def parse_and_save_data_in_thread(temp_file_name, output_file):
     threading.Thread(target=parse_and_save_data, args=(temp_file_name, output_file)).start()
 
+def extract_research_code(filename):
+    """Extract research code from filename like SmartCareCsv_24EIc-003-001U_26.12.2024.17.14.02_26.12.2024.17.18.43.csv"""
+    pattern = r'SmartCareCsv_([^_]+)_'
+    match = re.search(pattern, filename)
+    if match:
+        return match.group(1)
+    return None
 # Define the email sending function
 def send_email():
     try:
@@ -247,9 +255,11 @@ def read_new_data(filename):
                         file_line_count[filename] = file_line_count.get(filename, 0) + 1
 
                         # If 180 lines are written, call parse_and_save_data and reset
+                        # if line_write_count >= 10:
                         if line_write_count >= 180:
                             temp_file.flush()
-                            output_file = os.path.join("D:/24EIc/Test/Data", "Test_04.11.2024.10.36.00_04.11.2024.10.39.00.csv")
+                            research_code = extract_research_code(filename)
+                            output_file = os.path.join("D:/24EIc/Test/Data", f"SmartCareCsv_{research_code}_04.11.2024.10.36.00_04.11.2024.10.39.00.csv")
                             parse_and_save_data(temp_file_name, output_file)
                             # parse_and_save_data_in_thread(temp_file_name, output_file)
                             # break
@@ -321,8 +331,8 @@ def monitor_folder():
         for filename in new_files:
             if filename.endswith(".csv"):
                 file_datetime = extract_starttime(filename)
-
-                if file_datetime and file_datetime == current_date:
+ 
+                if file_datetime and file_datetime == current_date: #
                     logger.info(f"New CSV file detected: {filename}")
                     read_new_data(filename)
                     #after reading the file, we delete file with "temp" in the name
