@@ -12,6 +12,7 @@ import tempfile
 import csv
 from mail_sender import MailSender
 import pythoncom
+import numpy as np
 
 sys.path.append("D:\SetUp\ReadData\platform-tools")
 print(sys.path)
@@ -237,16 +238,52 @@ def read_new_data(filename):
 
                 if new_lines:
                     for line in new_lines:
-                        
+                    
                         csv_writer.writerow([line.strip()])
                         
-                        if line.split(",")[3] == '"255"':
+                        spo2_status = line.split('","')[5]
+                        # thiet bi bi drop
+                        if "1" in spo2_status:
                             current_time = datetime.now()
+                            logger.debug("SPO2 status 1 detected")
                             # Check if cooldown period has passed
                             if current_time - last_email_sent > timedelta(minutes=cooldown_minutes):
                                 email_thread = threading.Thread(target=send_email)
                                 email_thread.start()
-                                last_email_sent = current_time # Update last email sent time
+                                last_email_sent = current_time
+                        #check noise
+                        perfusion = line.split('","')[9]
+                        perfusion_list = perfusion.split('"')[0].strip('[]').split(',')
+                        perfusion_list = [float(x.strip()) for x in perfusion_list if x.strip().lower() != 'perfusion']
+                        
+                        s = float(sum(perfusion_list))
+                        l = float(len(perfusion_list))
+                        
+                        if l > 0:  # Check if length is greater than 0
+                            average_perfusion = s/l
+                            print(f"Average perfusion: {average_perfusion}")
+                            if average_perfusion > 6:
+                                current_time = datetime.now()
+                                logger.debug("Perfusion average > 6 detected")
+                                # Check if cooldown period has passed
+                                if current_time - last_email_sent > timedelta(minutes=cooldown_minutes):
+                                    email_thread = threading.Thread(target=send_email)
+                                    email_thread.start()
+                                    last_email_sent = current_time
+                            
+                        # else:
+                        #     print("Cannot calculate average: perfusion list is empty")
+                        # print(np.quantile([float(i) for i in perfusion_list], 0.25))    
+                        
+                        # print(np.quantile([float(i) for i in perfusion_list], 0.75))
+
+                        # if line.split(",")[3] == '"255"':
+                        #     current_time = datetime.now()
+                        #     # Check if cooldown period has passed
+                        #     if current_time - last_email_sent > timedelta(minutes=cooldown_minutes):
+                        #         email_thread = threading.Thread(target=send_email)
+                        #         email_thread.start()
+                        #         last_email_sent = current_time # Update last email sent time
 
                     
                         logger.info("writting data...")
