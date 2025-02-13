@@ -14,6 +14,7 @@ import csv
 from mail_sender import MailSender
 import pythoncom
 import numpy as np
+import pandas as pd
 
 sys.path.append("D:\SetUp\ReadData\platform-tools")
 print(sys.path)
@@ -139,52 +140,6 @@ def organize_file_path(filename: str, base_path: str = "D:\\24EIc") -> str:
     return os.path.join(base_path, filename)
 
 
-def parse_and_save_data(input_file, output_file):
-    with open(input_file, 'r') as infile, open(output_file, 'w', newline='') as outfile:
-        reader = csv.reader(infile)
-        writer = csv.writer(outfile)
-
-        # Define headers based on the data format
-        headers = [
-           "timestamp","device_id","battery","hr","o2","spo2_status","pleth","red","ir","perfusion"
-        ]
-        writer.writerow(headers)
-
-        for row_num, row in enumerate(reader, start=1):
-            # Each row is in a single column A1
-            if len(row) < 1:
-                logger.error(f"Skipping row {row_num}: empty row")
-                continue
-
-            try:
-                # The entire row content is in row[0]; we split it into individual values
-                # Using csv.reader again to handle complex quoted strings within the cell
-                data = next(csv.reader([row[0]]))
-
-                # Parse fixed columns
-                timestamp = data[0]
-                mac_address = data[1]
-                field1 = data[2]
-                field2 = data[3]
-                field3 = data[4]
-
-                # Parse array columns by converting string representation to Python lists
-                array1 = ast.literal_eval(data[5])
-                array2 = ast.literal_eval(data[6])
-                array3 = ast.literal_eval(data[7])
-                array4 = ast.literal_eval(data[8])
-                array5 = ast.literal_eval(data[9])
-
-                # Write parsed data to output file
-                writer.writerow([timestamp, mac_address, field1, field2, field3, array1, array2, array3, array4, array5])
-
-            except (ValueError, SyntaxError, IndexError) as e:
-                logger.error(f"Error parsing row {row_num}: {e}")
-                continue
-
-def parse_and_save_data_in_thread(temp_file_name, output_file):
-    threading.Thread(target=parse_and_save_data, args=(temp_file_name, output_file)).start()
-
 def extract_research_code(filename):
     """Extract research code from filename like SmartCareCsv_24EIc-003-001U_26.12.2024.17.14.02_26.12.2024.17.18.43.csv"""
     pattern = r'SmartCareCsv_([^_]+)_'
@@ -242,111 +197,111 @@ def log_device_event(event_type, msg, value=None):
     except Exception as e:
         logger.error(f"Failed to log event: {e}")
 
+# Check for drop in SpO2 value
+def check_drop(df):
+    count = len(df[df['spo2_status'].apply(lambda x: '1' in x)])
+    print("count:", count)
+    if count > 3:
+        return True
+    return False
+# Check for noise in perfusion value
+def check_noise(df, threshold=6):
+    df['perfusion'] = df['perfusion'].apply(lambda x: ast.literal_eval(x))
+    count = len(df[df['perfusion'].apply(lambda x: np.quantile(x, 0.75) > threshold)])
+    print("count:", count)
+    if count > 60:
+        return True
+    return False
+# Define the function to read new data from the file
 def read_new_data(filename):
-    # folder = organize_file_path(filename)
-    # file_path = os.path.join(folder, filename)
     file_path = organize_file_path(filename)
     global current_file_processing 
     current_file_processing = file_path
     no_new_data_count = 0
     last_size = 0
+    
+    # Store data in list for batch processing
+    data_buffer = []
+    headers = [
+        "timestamp", "device_id", "battery", "hr", "o2", "spo2_status", 
+        "pleth", "red", "ir", "perfusion"
+    ]
 
-    # Create a temporary file for writing data
-    with tempfile.NamedTemporaryFile('w+', newline='', delete=False) as temp_file:
-        temp_file_name = temp_file.name
-        csv_writer = csv.writer(temp_file)
-
-        global last_email_sent # Use global variable
-        line_write_count = 0
-
-        while True:
-            try:
-                pull_file(filename)
-            except Exception as e:
-                if "No such file or directory" in str(e):
-                    logger.error(f"File {filename} not found on device.")
-                    break
-                else:
-                    logger.error(f"Unexpected error pulling file {filename}: {e}")
-                    break
-            current_size = os.path.getsize(file_path)
-
-            if current_size > last_size:
-                start_line = file_line_count.get(filename, 0)
-                new_lines = read_lines_excluding_last(filename, start_line=start_line)
-
-                if new_lines:
-                    for line in new_lines:
-                    
-                        csv_writer.writerow([line.strip()])
-                        
-                        spo2_status = line.split('","')[5]
-                        # thiet bi bi drop
-                        if "1" in spo2_status:
-                            current_time = datetime.now()
-                            log_device_event("drop", "Oximeter Drop detected", value=spo2_status)
-                            # Check if cooldown period has passed
-                            if current_time - last_email_sent > timedelta(minutes=cooldown_minutes):
-                                email_thread = threading.Thread(target=send_email, args=("Oximeter Drop Detected", "Oximeter Drop detected. Please check the device."))
-                                email_thread.start()
-                                last_email_sent = current_time
-                        #check noise
-                        perfusion = line.split('","')[9]
-                        perfusion_list = perfusion.split('"')[0].strip('[]').split(',')
-                        perfusion_list = [float(x.strip()) for x in perfusion_list if x.strip().lower() != 'perfusion']
-                        
-                        if len(perfusion_list) > 0:  # Check if length is greater than 0
-                            q3 = np.quantile(perfusion_list,0.75)
-                            print("q3:", q3)
-                            if q3 > 6:
-                                current_time = datetime.now()
-                                log_device_event("noise", "Data noise detected", value=perfusion_list)
-                                # Check if cooldown period has passed
-                                if current_time - last_email_sent > timedelta(minutes=cooldown_minutes):
-                                    email_thread = threading.Thread(target=send_email, args=("Data Noise Detected", "Data noise detected. Please check the device."))
-                                    email_thread.start()
-                                    last_email_sent = current_time
-                        
-                        # if line.split(",")[3] == '"255"':
-                        #     current_time = datetime.now()
-                        #     # Check if cooldown period has passed
-                        #     if current_time - last_email_sent > timedelta(minutes=cooldown_minutes):
-                        #         email_thread = threading.Thread(target=send_email)
-                        #         email_thread.start()
-                        #         last_email_sent = current_time # Update last email sent time
-
-                        logger.info("writting data...")
-                        line_write_count += 1
-                        file_data_count[filename] = file_data_count.get(filename, 0) + 1
-                        file_line_count[filename] = file_line_count.get(filename, 0) + 1
-
-                        # If 180 lines are written, call parse_and_save_data and reset
-                        # if line_write_count >= 10:
-                        if line_write_count >= 180:
-                            temp_file.flush()
-                            research_code = extract_research_code(filename)
-                            output_file = os.path.join("D:/24EIc/Test/Data", f"SmartCareCsv_{research_code}_04.11.2024.10.36.00_04.11.2024.10.39.00.csv")
-                            parse_and_save_data(temp_file_name, output_file)
-                            # parse_and_save_data_in_thread(temp_file_name, output_file)
-                            # break
-                            logger.debug("generate 3min file ")
-                            temp_file.seek(0)
-                            temp_file.truncate()
-                            line_write_count = 0
-
-                    last_size = current_size
-                    no_new_data_count = 0
-                else:
-                    logger.info(f"No new lines found in {filename}, waiting...")
+    while True:
+        try:
+            pull_file(filename)
+        except Exception as e:
+            if "No such file or directory" in str(e):
+                logger.error(f"File {filename} not found on device.")
+                break
             else:
-                no_new_data_count += 1
-                logger.info(f"No new data for {no_new_data_count} seconds.")
+                logger.error(f"Unexpected error pulling file {filename}: {e}")
+                break
 
-                if no_new_data_count >= 5:
-                    logger.info(f"File {filename} completed. Total lines read: {file_data_count[filename]}")
-                    break
+        current_size = os.path.getsize(file_path)
 
-            time.sleep(1)  # Check every second for new data
+        if current_size > last_size:
+            start_line = file_line_count.get(filename, 0)
+            new_lines = read_lines_excluding_last(filename, start_line=start_line)
+
+            if new_lines:
+                for line in new_lines:
+                    # Extract data                   
+                    data = line.split('","')
+                    if "timestamp" in data[0].lower(): continue  # Skip header row
+                        
+                    row_data = [
+                        data[0].split('"')[1],  # timestamp
+                        data[1],                # device
+                        data[2],                # battery
+                        data[3],                # hr
+                        data[4],                # spo2
+                        data[5],                # spo2_status
+                        data[6],                # pleth
+                        data[7],                # red
+                        data[8],                # ir
+                        data[9].split('"')[0]     # perfusion
+                    ]
+                    logger.infor("Writing data to buffer")
+                    data_buffer.append(row_data)
+                    file_data_count[filename] = file_data_count.get(filename, 0) + 1
+                    file_line_count[filename] = file_line_count.get(filename, 0) + 1
+
+                    # When buffer reaches 180 lines, save to CSV
+                    if len(data_buffer) >= 180:
+                        # Convert buffer to DataFrame
+                        df = pd.DataFrame(data_buffer, columns=headers)
+                        df.dropna(axis=0, how='any',inplace=True)
+                        # Handle drop and noise data 
+                        if check_drop(df):
+                            log_device_event("drop", f"Drop detected in {filename}")
+                            send_email("Oximeter Drop Detected", "Please check the patient")
+                        if check_noise(df):
+                            log_device_event("noise", f"Noise detected in {filename}")
+                            send_email("Data Noise Detected", "Please check the device")
+
+
+                        # Create output directory if not exists
+                        output_dir = "D:/Data/Test"
+                        os.makedirs(output_dir, exist_ok=True)
+                        
+                        # Generate output filename with timestamp
+                        research_code = extract_research_code(filename)
+                        output_file = os.path.join(output_dir, f"SmartCareCsv_{research_code}_04.11.2024.10.36.00_04.11.2024.10.39.00.csv")
+                        
+                        # Save DataFrame to CSV in one operation
+                        df.to_csv(output_file, index=False)
+                        logger.info(f"Generated 3min CSV file")
+                        
+                        # Clear buffer
+                        data_buffer = []
+
+                last_size = current_size
+                no_new_data_count = 0
+            else:
+                logger.info(f"No new lines found in {filename}, waiting...")
+
+        time.sleep(1)
 
 def extract_starttime(filename):
     # Split by underscore to separate the datetime parts
