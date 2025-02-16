@@ -26,6 +26,7 @@ ADB_PATH = "./ReadData/platform-tools/adb.exe"
 # Path to the folder on the phone where the CSV file will be created
 # PHONE_FOLDER = "/sdcard/Download/OximeterData/DataModel"
 PHONE_FOLDER = "/sdcard/Download/OximeterData"
+STREAM_FOLDER = "/sdcard/Download/OximeterData/StreamModel"
 
 ANNOTATION_FOLDER = "/sdcard/Download/OximeterData/Annotation"
 
