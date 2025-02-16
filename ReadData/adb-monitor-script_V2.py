@@ -15,6 +15,7 @@ from mail_sender import MailSender
 import pythoncom
 import numpy as np
 import pandas as pd
+from pipeline_log import get_mode, get_patients, post_pipeline_log
 
 sys.path.append("D:\SetUp\ReadData\platform-tools")
 print(sys.path)
@@ -199,9 +200,13 @@ def log_device_event(event_type, msg, value=None):
 
 # Check for drop in SpO2 value
 def check_drop(df):
-    count = len(df[df['spo2_status'].apply(lambda x: '1' in x)])
-    print("count:", count)
-    if count > 3:
+    # Create mask to filter rows with drop in SpO2
+    drop_mask = df['spo2_status'].apply(lambda x: '1' in x)
+    # Get timestamps of rows with drops
+    drop_timestamps = df[drop_mask]['timestamp'].tolist()
+    print("drop_timestamps:", drop_timestamps)
+    print("count:", len(drop_timestamps))
+    if len(drop_timestamps) > 3:
         return True
     return False
 # Check for noise in perfusion value
@@ -219,7 +224,10 @@ def read_new_data(filename):
     current_file_processing = file_path
     no_new_data_count = 0
     last_size = 0
-    
+    research_code = extract_research_code(filename)
+    patients = get_patients()
+    #patient_id to post pipeline log
+    patient_id = patients.get(research_code)
     # Store data in list for batch processing
     data_buffer = []
     headers = [
@@ -262,23 +270,28 @@ def read_new_data(filename):
                         data[8],                # ir
                         data[9].split('"')[0]     # perfusion
                     ]
-                    logger.infor("Writing data to buffer")
+                    logger.info("Writing data to buffer")
                     data_buffer.append(row_data)
                     file_data_count[filename] = file_data_count.get(filename, 0) + 1
                     file_line_count[filename] = file_line_count.get(filename, 0) + 1
 
                     # When buffer reaches 180 lines, save to CSV
-                    if len(data_buffer) >= 180:
+                    if len(data_buffer) >= 10:
                         # Convert buffer to DataFrame
                         df = pd.DataFrame(data_buffer, columns=headers)
                         df.dropna(axis=0, how='any',inplace=True)
                         # Handle drop and noise data 
                         if check_drop(df):
-                            log_device_event("drop", f"Drop detected in {filename}")
-                            send_email("Oximeter Drop Detected", "Please check the patient")
-                        if check_noise(df):
-                            log_device_event("noise", f"Noise detected in {filename}")
-                            send_email("Data Noise Detected", "Please check the device")
+                            # log_device_event("drop", f"Drop detected in {filename}")
+                            # post_pipeline_log(patient_id, "Drop detected", df)
+                            if get_mode():
+                                send_email("Oximeter Drop Detected", "Please check the patient")
+                            # send_email("Oximeter Drop Detected", "Please check the patient")
+                        # if check_noise(df):
+                        #     # log_device_event("noise", f"Noise detected in {filename}")
+                        #     # post_pipeline_log(patient_id, "Noise detected", df)
+                        #     if get_mode():
+                        #         send_email("Data Noise Detected", "Please check the device")
 
 
                         # Create output directory if not exists
@@ -286,7 +299,7 @@ def read_new_data(filename):
                         os.makedirs(output_dir, exist_ok=True)
                         
                         # Generate output filename with timestamp
-                        research_code = extract_research_code(filename)
+                        
                         output_file = os.path.join(output_dir, f"SmartCareCsv_{research_code}_04.11.2024.10.36.00_04.11.2024.10.39.00.csv")
                         
                         # Save DataFrame to CSV in one operation
